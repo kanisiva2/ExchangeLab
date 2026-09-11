@@ -261,7 +261,18 @@ Learning checkpoint: demonstrate one frame split across reads and two frames com
 
 Learning checkpoint: trace an update from an exchange simulator, through the kernel socket buffers and decoder, into market state.
 
-#### 2D — Tests
+#### 2D — Observable terminal demo
+
+- Add one small terminal-based demo path; do not build a GUI or a general-purpose network query service.
+- Let the user choose an exchange, instrument, fixed-point price, and sequence number for one update.
+- Send that update through the same encoder, TCP connection, decoder, validation, and `MarketState` path used by simulated feed traffic.
+- Query the chosen instrument after the receiver processes the update and print the sorted cross-exchange result clearly enough to identify the submitted price.
+- Keep the normal seeded automatic simulator available for larger runs.
+- Choose the simplest understandable command-line interaction during the Phase 2 design walkthrough; it may be a scripted one-shot demo rather than a permanently running interactive service.
+
+Learning checkpoint: submit one known price, trace it across the complete TCP path, and explain why the subsequent query contains that value.
+
+#### 2E — Tests
 
 - Byte-exact encode/decode round trip.
 - Every useful frame split boundary.
@@ -270,6 +281,7 @@ Learning checkpoint: trace an update from an exchange simulator, through the ker
 - Truncated connection input.
 - Ten simultaneous localhost connections.
 - TCP and in-process paths produce the same result from the same logical updates.
+- The terminal demo's submitted update appears in the subsequent query result.
 - Shutdown completes without hanging.
 
 ### Phase 2 exit condition
@@ -277,6 +289,7 @@ Learning checkpoint: trace an update from an exchange simulator, through the ker
 - Ten feeds stream concurrently over localhost.
 - Fragmented and combined reads work correctly.
 - Invalid network data cannot mutate market state.
+- A user-selected update can be sent through TCP and visibly confirmed with a query.
 - The project owner can explain why TCP requires application-level framing and how the asynchronous flow is structured.
 
 ## 8. Phase 3 — Concurrency and strategy comparison

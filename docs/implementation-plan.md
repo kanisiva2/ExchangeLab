@@ -1,7 +1,9 @@
 # ExchangeLab learning and implementation plan
 
-Status: proposed scope awaiting project-owner approval; Phase 1 not started  
-Purpose: résumé project and guided introduction to C++ systems programming  
+Status: approved scope; Phase 1 complete; Phase 2 not started
+
+Purpose: résumé project and guided introduction to C++ systems programming
+
 Active scope: five phases ending in a benchmarked, polished local project
 
 The original ExchangeLab handoff describes the broader product vision. This shorter plan is the active implementation scope. Features excluded here are not commitments and should not be added unless the project owner deliberately revisits the scope after the core project is finished.
@@ -123,7 +125,7 @@ Sequence numbers are monotonic per exchange feed, not per instrument.
 
 | Phase | Status | Main result |
 |---:|---|---|
-| 1 — Reference engine | Not started | Correct single-threaded simulation and queries |
+| 1 — Reference engine | Complete | Correct single-threaded simulation and queries |
 | 2 — TCP feeds | Not started | Ten simple localhost binary feeds |
 | 3 — Concurrency | Not started | Global and striped locking plus sorting comparison |
 | 4 — Faults and replay | Not started | Reproducible failures and matching replay |
@@ -512,10 +514,13 @@ These ideas are not rejected forever. They are excluded because they add much le
 
 ## 12. Current progress
 
-- Simplified five-phase plan proposed and recorded for review.
-- Phase 1 has not started.
-- No C++ source, CMake project, placeholder interface, or future-phase scaffold has been created.
-- Next session: explain the Phase 1 module plan and CMake/C++ foundations, then implement Phase 1 in learning checkpoints only after the project owner asks to begin.
+- Simplified five-phase plan approved.
+- Phase 1 completed on 2026-09-11 using CMake 3.29.2 and Apple Clang 17.0.0.
+- Added a concrete single-threaded `MarketState`, dense storage, fixed-point prices, per-exchange sequence validation, sorted queries, deterministic checksum, seeded simulator, CLI, and focused tests.
+- `ctest --test-dir build --output-on-failure`: 13 of 13 tests passed.
+- The documented default demo processed 1,000,000 updates and produced checksum `0xc5b853573d929037` for seed 42. Two runs produced byte-identical output.
+- Phase 2 networking has not started, and no concurrency or future-phase scaffolding exists.
+- Next session: explain TCP framing, sockets, asynchronous callbacks, and the proposed Phase 2 modules before editing.
 
 ## 13. Core definition of done
 

@@ -1,0 +1,26 @@
+# CMake build output
+/build/
+/cmake-build-*/
+/out/
+
+# Compiler and linker output
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Test and coverage output
+Testing/
+*.gcda
+*.gcno
+*.profraw
+*.profdata
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+*.swp

@@ -24,3 +24,7 @@ Testing/
 .idea/
 .vscode/
 *.swp
+
+# Local learning walkthroughs
+/docs/phase-1-explanation.md
+/docs/phase-2-explanation.md

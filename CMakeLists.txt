@@ -28,9 +28,51 @@ target_include_directories(exchangelab_core
 target_compile_features(exchangelab_core PUBLIC cxx_std_20)
 exchangelab_enable_warnings(exchangelab_core)
 
-add_executable(exchangelab src/main.cpp)
-target_link_libraries(exchangelab PRIVATE exchangelab_core)
-exchangelab_enable_warnings(exchangelab)
+include(FetchContent)
+
+FetchContent_Declare(
+    asio
+    URL https://github.com/chriskohlhoff/asio/archive/refs/tags/asio-1-38-2.tar.gz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(asio)
+
+find_package(Threads REQUIRED)
+add_library(exchangelab_asio INTERFACE)
+target_include_directories(exchangelab_asio
+    INTERFACE
+        ${asio_SOURCE_DIR}/include
+)
+target_compile_definitions(exchangelab_asio INTERFACE ASIO_STANDALONE)
+target_link_libraries(exchangelab_asio INTERFACE Threads::Threads)
+
+add_library(exchangelab_network
+    src/exchange_publisher.cpp
+    src/market_server.cpp
+    src/query_client.cpp
+    src/query_protocol.cpp
+    src/update_codec.cpp
+    src/update_stream_decoder.cpp
+)
+target_link_libraries(exchangelab_network
+    PUBLIC
+        exchangelab_core
+        exchangelab_asio
+)
+target_compile_features(exchangelab_network PUBLIC cxx_std_20)
+exchangelab_enable_warnings(exchangelab_network)
+
+add_executable(exchangelab-server src/server_main.cpp)
+target_link_libraries(exchangelab-server PRIVATE exchangelab_network)
+exchangelab_enable_warnings(exchangelab-server)
+
+add_executable(exchange-simulator src/exchange_simulator_main.cpp)
+target_link_libraries(exchange-simulator PRIVATE exchangelab_network)
+exchangelab_enable_warnings(exchange-simulator)
+
+add_executable(exchangelab-client src/client_main.cpp)
+target_link_libraries(exchangelab-client PRIVATE exchangelab_network)
+exchangelab_enable_warnings(exchangelab-client)
 
 include(CTest)
 
@@ -50,11 +92,15 @@ if(BUILD_TESTING)
 
     add_executable(exchangelab_tests
         tests/market_state_test.cpp
+        tests/query_protocol_test.cpp
         tests/simulator_test.cpp
+        tests/tcp_system_test.cpp
+        tests/update_codec_test.cpp
+        tests/update_stream_decoder_test.cpp
     )
     target_link_libraries(exchangelab_tests
         PRIVATE
-            exchangelab_core
+            exchangelab_network
             GTest::gtest_main
     )
     exchangelab_enable_warnings(exchangelab_tests)

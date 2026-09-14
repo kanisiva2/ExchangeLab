@@ -4,6 +4,7 @@
 
 #include <charconv>
 #include <csignal>
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <iostream>
@@ -50,6 +51,11 @@ void print_usage(const char *program) {
       << "  --query-port N       Text query port (default: 9001)\n"
       << "  --exchanges N        Exchange count (default: 10)\n"
       << "  --instruments N      Instrument count (default: 50000)\n"
+      << "  --mode MODE          single-threaded, global-read, striped-read,\n"
+      << "                       or striped-write (default: single-threaded)\n"
+      << "  --query-workers N    Threaded query workers (default: 4)\n"
+      << "  --query-queue N      Waiting query capacity (default: 256)\n"
+      << "  --stripes N          Locks used by striped modes (default: 64)\n"
       << "  --help               Show this help message\n";
 }
 
@@ -77,6 +83,28 @@ ServerOptions parse_options(const int argc, char *argv[]) {
     } else if (option == "--instruments") {
       options.config.instrument_count =
           parse_bounded<std::uint32_t>(value, option);
+    } else if (option == "--mode") {
+      if (value == "single-threaded") {
+        options.config.mode = exchangelab::MarketServerMode::single_threaded;
+      } else if (value == "global-read") {
+        options.config.mode = exchangelab::MarketServerMode::global_read;
+      } else if (value == "striped-read") {
+        options.config.mode = exchangelab::MarketServerMode::striped_read;
+      } else if (value == "striped-write") {
+        options.config.mode = exchangelab::MarketServerMode::striped_write;
+      } else {
+        throw std::invalid_argument(
+            "--mode must be single-threaded, global-read, striped-read, or "
+            "striped-write");
+      }
+    } else if (option == "--query-workers") {
+      options.config.query_worker_count =
+          parse_bounded<std::size_t>(value, option);
+    } else if (option == "--query-queue") {
+      options.config.query_queue_capacity =
+          parse_bounded<std::size_t>(value, option);
+    } else if (option == "--stripes") {
+      options.config.stripe_count = parse_bounded<std::size_t>(value, option);
     } else {
       throw std::invalid_argument("unknown option: " + std::string(option));
     }
@@ -116,12 +144,36 @@ int main(const int argc, char *argv[]) {
               << server.query_port() << '\n'
               << "  exchanges: " << options.config.exchange_count << '\n'
               << "  instruments: " << options.config.instrument_count << '\n'
+              << "  mode: "
+              << exchangelab::market_server_mode_name(options.config.mode)
+              << '\n'
+              << "  feed threads: "
+              << (options.config.mode ==
+                          exchangelab::MarketServerMode::single_threaded
+                      ? 0
+                      : options.config.exchange_count)
+              << '\n'
+              << "  query workers: "
+              << (options.config.mode ==
+                          exchangelab::MarketServerMode::single_threaded
+                      ? 0
+                      : options.config.query_worker_count)
+              << '\n'
+              << "  query queue capacity: "
+              << (options.config.mode ==
+                          exchangelab::MarketServerMode::single_threaded
+                      ? 0
+                      : options.config.query_queue_capacity)
+              << '\n'
               << "Press Ctrl+C to stop.\n";
     event_loop.run();
 
     const auto network = server.stats();
-    const auto &market = server.market_state().stats();
+    const auto market = server.market_stats();
     std::cout << "Server stopped\n"
+              << "  mode: "
+              << exchangelab::market_server_mode_name(options.config.mode)
+              << '\n'
               << "  feed connections: " << network.feed_connections_accepted
               << '\n'
               << "  query connections: " << network.query_connections_accepted
@@ -130,7 +182,11 @@ int main(const int argc, char *argv[]) {
               << '\n'
               << "  update frames rejected: " << network.update_frames_rejected
               << '\n'
-              << "  market updates accepted: " << market.accepted << '\n';
+              << "  query requests: " << network.query_requests << '\n'
+              << "  query queue full: " << network.query_queue_full << '\n'
+              << "  market updates accepted: " << market.accepted << '\n'
+              << "  logical checksum: 0x" << std::hex
+              << server.logical_checksum() << std::dec << '\n';
     return 0;
   } catch (const std::exception &error) {
     std::cerr << "error: " << error.what() << '\n';

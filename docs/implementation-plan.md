@@ -26,6 +26,18 @@ ExchangeLab will be a local C++20 system that:
 
 The goal is not production completeness. The goal is a finished, understandable system that demonstrates modern C++, CMake, TCP networking, concurrent server design, correctness testing, and evidence-based performance reasoning.
 
+### Intended résumé outcomes
+
+The implementation and benchmark scope should produce enough controlled evidence to support résumé bullets with the following structures:
+
+- Built a continuously running C++20 market-data server processing `[X price updates/sec]` across 10 TCP exchange feeds and 50,000 instruments, while serving `[Y sorted queries/sec]` at `[Z microseconds p99 latency]`.
+- Scaled the server from `[A]` to `[B] updates/sec` while supporting `[N concurrent clients]` by parallelizing feed processing and partitioning shared market state across striped locks.
+- Increased sorted-query capacity from `[A]` to `[B] queries/sec` under a 90%-query workload by maintaining ordered price views during updates, while sort-on-read performed best for update-heavy traffic.
+
+These are target structures, not predetermined claims. Do not insert numbers until controlled benchmarks produce them. If measurements do not support an expected outcome, report the actual result and revise the corresponding bullet honestly.
+
+Phase 3 should implement only the concurrency, locking, and sorting functionality needed to investigate the second and third bullets. Phase 4 will add the focused measurements needed to support all three. Sequence validation, framing, fixed-point prices, bounded queues, sanitizers, and shutdown remain important supporting details rather than material to force into résumé bullets.
+
 ## 2. Learning is a first-class requirement
 
 The project owner is learning C++, networking, and CMake while Codex implements the code. Completion speed is secondary to being able to understand and defend the finished system.
@@ -155,8 +167,8 @@ Ordinary correctness tests for duplicate, stale, out-of-order, and gapped sequen
 | Phase | Status | Main result |
 |---:|---|---|
 | 1 — Reference engine | Complete | Correct single-threaded simulation, dense state, and sorted queries |
-| 2 — Continuous TCP system | Not started | Independent server, exchange simulator, and interactive query client |
-| 3 — Multithreading and strategies | Not started | Dedicated feed threads, bounded query workers, locking, and sorting variants |
+| 2 — Continuous TCP system | Complete | Independent server, exchange simulator, and interactive query client |
+| 3 — Multithreading and strategies | Not started | Selectable Phase 2 baseline, dedicated feed threads, bounded query workers, locking, and sorting variants |
 | 4 — Benchmarks and polish | Not started | Focused measurements, final verification, documentation, and résumé evidence |
 
 ## 6. Phase 1 — Single-threaded reference engine
@@ -417,7 +429,9 @@ Repeated queries may return different prices because updates continue in the bac
 
 ### Goal
 
-Introduce deliberate concurrent access using an explicit 10-feed architecture, a bounded query-worker pool, two understandable locking designs, and two sorting strategies.
+Add only the concurrent feed processing, bounded query execution, locking, and sorting implementations needed to investigate the second and third intended résumé outcomes. Keep the completed Phase 2 single-threaded server runnable as the behavioral and performance baseline.
+
+Phase 2 is complete and must not be reopened or broadly rewritten. Phase 3 may make focused shared-code changes where runtime selection or the concurrent-engine boundary genuinely requires them, but it must preserve the Phase 2 protocol behavior and original `MarketState` semantics.
 
 ### Concepts to teach
 
@@ -429,16 +443,46 @@ Introduce deliberate concurrent access using an explicit 10-feed architecture, a
 - Sort-on-read versus sort-on-write.
 - What ThreadSanitizer can and cannot establish.
 
-### Selected server thread architecture
+### Selectable runtime modes and Phase 2 preservation
+
+Use one server executable with four explicit runtime modes:
+
+1. `single-threaded`: the completed Phase 2 architecture, using one caller-owned Asio event-loop thread and the original single-threaded `MarketState` with sort-on-read.
+2. `global-read`: the Phase 3 threaded server using global reader/writer locking and sort-on-read.
+3. `striped-read`: the Phase 3 threaded server using striped reader/writer locking and sort-on-read.
+4. `striped-write`: the Phase 3 threaded server using striped reader/writer locking and sort-on-write.
+
+The final three are the only Phase 3 locking/sorting configurations. The first is a preserved baseline, not a fourth concurrent engine.
+
+Prefer a command-line option such as `--mode single-threaded|global-read|striped-read|striped-write`. In `single-threaded` mode:
+
+- Keep feed accepts, asynchronous feed reads, decoding, updates, query parsing, query execution, response formatting, and socket writes on the one existing event-loop thread.
+- Keep using the Phase 1 `MarketState` directly, without concurrency locks, feed-worker threads, or query-worker threads.
+- Preserve the current TCP protocols, persistent-client behavior, validation, reconnect behavior, counters, and shutdown semantics.
+
+All modes must use the same server executable, codec, query protocol, exchange simulator, query workload generator, dimensions, configuration parsing, and externally visible responses. Share the acceptor, protocol, formatting, counter, and lifecycle code where practical. Branch only where the execution model genuinely differs. Do not duplicate the server codebase merely to preserve the baseline.
+
+If maintaining the selectable baseline proves substantially more complex than this design predicts, stop and reassess before replacing it with revision-based benchmarking. The fallback is the Phase-2-complete Git revision plus an equivalent later benchmark workload, but the selectable mode is preferred because it permits identical benchmark code and protocol behavior.
+
+### Selected threaded-server architecture
+
+The threaded modes have:
+
+- One caller-owned main Asio thread for acceptors, query-client socket I/O, feed connection identification, signal handling, and session lifetime.
+- One server-owned, long-running feed-processing thread for each configured exchange: 10 in the default system.
+- A server-owned bounded query-worker pool with a configurable worker count and a small default of four.
+
+With the default configuration, a threaded server therefore has 15 application threads: one main I/O thread, 10 feed threads, and four query workers. The server owns and joins every thread it creates. No threads are detached.
 
 #### Exchange feeds
 
-- Use one long-running feed-processing thread for each of the 10 exchange connections.
-- Each feed thread receives and decodes updates from its assigned exchange.
-- Each feed thread preserves received order within that exchange.
-- Each feed thread applies valid updates to the shared market state.
+- Create one permanent worker slot for each exchange ID.
+- Accept a connection on the main I/O thread and read enough of its first complete frame to validate and identify the exchange without mutating market state.
+- Hand the connection and first valid update to the corresponding exchange worker. After handoff, that worker owns the socket, decoder, receive buffer, and ordered calls to the shared engine for that connection.
+- Keep each exchange worker alive across disconnects so a replacement connection returns to the same logical worker and existing sequence state.
+- Reject a second connection that claims an exchange whose current connection is still active. A reconnect that arrives during the small disconnect-notification window retries through the simulator's existing fixed reconnect behavior.
 - Do not create a new thread for each update.
-- Make single-writer ownership of each exchange's sequence state explicit and aggregate counters safely.
+- Make single-writer ownership of each exchange's ordered input explicit and protect any engine metadata that must also be observed by checksum or test code.
 
 This architecture is selected because the number of exchange feeds is fixed and small, and per-exchange thread ownership is easy to understand and defend.
 
@@ -446,13 +490,16 @@ This architecture is selected because the number of exchange feeds is fixed and 
 
 - Keep query-client connection acceptance and socket I/O separate from query execution.
 - Parse complete requests from persistent clients and submit query work to a bounded, fixed-size worker pool.
-- Use an ordinary mutex-protected task queue and `std::condition_variable` unless the existing networking code offers an equally simple design.
+- Use an ordinary mutex-protected task queue and `std::condition_variable`.
 - Make the worker count configurable, with a reasonable default of four.
 - Do not create an unlimited number of client threads.
-- Do not let an idle persistent client occupy a query worker; workers receive only complete query tasks.
+- Keep an asynchronous read pending for each idle persistent client on the main I/O thread. Workers receive only complete query tasks, so an idle client never occupies a worker.
 - Allow multiple workers to process unrelated instruments concurrently.
-- Serialize responses safely for each persistent connection so replies are not interleaved or written concurrently.
-- Choose one simple full-queue policy during the Phase 3 design walkthrough, such as returning a `BUSY` response or applying bounded backpressure. Do not build an elaborate load-shedding system.
+- Permit only one request-response cycle in flight per client session. A worker posts the completed response back to the main I/O thread, and only that thread writes the session's socket. Resume reading that session after its write completes so responses cannot overlap or reorder.
+- Use immediate `ERROR busy` rejection when the waiting-task queue is full. Do not block the main I/O thread or build an elaborate load-shedding system.
+- On shutdown, stop accepting submissions, close sessions, discard queued work whose clients are closing, wake all workers, allow any short in-progress query to finish safely, and join every worker.
+
+Do not implement lock-free queues, work stealing, adaptive pools, or production-grade schedulers.
 
 ### Required market-state configurations
 
@@ -464,18 +511,85 @@ Implement only:
 
 Use the existing dense representation for all three configurations. Do not implement every possible combination of engines and strategies. Introduce a shared engine interface only when the second working implementation actually requires it. Do not create factories, plugin systems, or placeholder engine classes.
 
-These comparisons are required because they provide the project's primary measured engineering conclusions.
+The global and striped sort-on-read configurations isolate lock granularity. The two striped configurations isolate sorting placement. No other locking/sorting combinations are required.
+
+### Shared behavior without excessive abstraction
+
+- Keep the Phase 1 `MarketState` concrete and directly used by `single-threaded` mode as the correctness oracle and Phase 2 runtime engine.
+- Give the global and striped implementations the same minimal update, query, stats, and checksum operations.
+- Introduce one small concurrent-engine interface only when both global and striped implementations are real. Do not force the Phase 1 oracle through that interface solely for uniformity.
+- Select among the small fixed set of real modes directly. Do not add a factory hierarchy, registration system, plugin mechanism, or placeholder engine.
+- Keep dense canonical storage in every mode using `instrument_id * exchange_count + exchange_id`.
+- For sort-on-write, maintain a dense fixed-size ordered slice per instrument rather than separately allocated per-instrument containers.
+
+This shape also supports Phase 4 without another major architecture rewrite: a direct benchmark can instantiate the concrete engines, while the end-to-end benchmark can select a runtime mode in the same server executable.
+
+### Locking and sorting rules
+
+#### Global locking with sort-on-read
+
+- Protect the complete concurrent market state with one `std::shared_mutex`.
+- An update holds the lock exclusively while validating sequence state, updating the dense entry, and changing protected counters.
+- A query holds the lock in shared mode only long enough to copy one instrument's values, then releases it before sorting the independent copy.
+- Stats and checksum traversal take consistent shared access.
+
+#### Striped locking
+
+- Map an instrument to a modest number of locks with `stripe = instrument_id % stripe_count`.
+- Keep the dense entry index unchanged; the stripe selects protection, not storage location.
+- An accepted update takes exclusive access to the relevant stripe.
+- A query takes shared access long enough to copy one instrument's coherent data.
+- Operations on different stripes may proceed concurrently; operations involving a writer on the same stripe serialize.
+- Protect per-exchange sequence metadata consistently so checksum traversal and tests cannot race with writers.
+- Acquire multiple locks only in one documented ascending order to prevent deadlock.
+- Use a modest fixed default stripe count. Make it configurable only if the option remains simple and is useful to the focused measurements.
+- Do not use one lock per instrument.
+
+#### Sorting placement
+
+- `sort-on-read`: store the current price by exchange, copy up to 10 valid prices during a query, release the lock, then sort by price and exchange ID.
+- `sort-on-write`: after changing one canonical price, rebuild that instrument's ordered fixed-size view while holding the stripe exclusively; queries copy the already sorted result.
+
+The purpose is to measure whether moving sorting work from queries to updates helps at specific update/query ratios, not merely to list two strategies.
+
+### Correctness equivalence plan
+
+- Generate one deterministic finite logical update stream with the existing simulator.
+- Apply it sequentially to the Phase 1 `MarketState` oracle.
+- Partition the identical updates by exchange while retaining order within each exchange and apply them concurrently to each Phase 3 engine.
+- After all writers stop, compare market counters, every instrument's query result, and the logical checksum.
+- Exclude any derived sort-on-write cache from the logical checksum so all modes hash the same canonical state.
+- Parameterize the existing finite TCP-versus-reference test across `single-threaded`, `global-read`, `striped-read`, and `striped-write`.
+- Preserve tests for invalid, duplicate, stale, out-of-order, and gapped updates; fragmented and combined frames; reconnects; and active shutdown.
+- Add focused tests proving coherent queries, per-feed ordering, queue capacity, idle-client behavior, response serialization, feed replacement, hot-instrument contention, and shutdown with queued and active work.
+- Run focused ThreadSanitizer tests on a supported platform. Treat a clean run as evidence for executed paths, not proof that all possible schedules are race-free.
+
+### Phase 4 benchmark readiness
+
+Phase 3 will not add measurement code to every hot path. It will provide the stable seams Phase 4 needs:
+
+- A selectable runtime-mode name reported by the server.
+- The unchanged Phase 1 `MarketState` for a direct single-threaded baseline.
+- Concrete global and striped engines exposing the same logical operations.
+- Configurable query-worker count and, if kept simple, stripe count.
+- Thread-safe state, counter, and checksum snapshots outside measured operations.
+- The same network protocols and logical workload generator for every end-to-end mode.
+- Separate update and query counters so later output can report them independently.
+
+Phase 4 must use identical seeds, dimensions, logical workloads, client counts, update/query ratios, traffic distributions, measurement intervals, and reporting methods when comparing modes.
 
 ### Implementation checkpoints
 
 #### 3A — Concurrent engine boundary
 
-- Identify the smallest common update, query, counters, and checksum operations needed by two real implementations.
+- Preserve and expose the Phase 2 server as selectable `single-threaded` mode without duplicating it.
+- Identify the smallest common update, query, counters, and checksum operations needed by the real concurrent implementations.
+- Establish the first concrete global sort-on-read engine as the safe initial threaded target.
 - Preserve the Phase 1 reference engine as the correctness oracle for controlled finite streams.
 - Refactor completed code only where the new concurrent boundary genuinely requires it.
 - Document which layer owns per-exchange ordering and sequence state.
 
-Learning checkpoint: explain why an interface is justified now and why it was unnecessary in Phase 1.
+Learning checkpoint: run the Phase 2 mode, trace its one thread, and explain why a concurrent interface is deferred until the striped implementation exists.
 
 #### 3B — Dedicated feed threads
 
@@ -483,16 +597,18 @@ Learning checkpoint: explain why an interface is justified now and why it was un
 - Run one long-lived receiver/decoder loop per exchange connection.
 - Preserve order within that connection and never create per-update threads.
 - Handle feed disconnect, replacement connection, and shutdown without leaking or detaching threads.
+- Verify that `single-threaded` mode still uses the original event-loop feed path.
 
 Learning checkpoint: follow two exchanges through two independent threads and show why updates within one exchange stay ordered.
 
 #### 3C — Bounded query-worker pool
 
 - Add the fixed-size worker pool and bounded task queue.
-- Protect the queue with one ordinary mutex and coordinate workers with `std::condition_variable` unless an equally simple existing mechanism is preferable.
+- Protect the queue with one ordinary mutex and coordinate workers with `std::condition_variable`.
 - Ensure idle clients consume connection resources but not worker threads.
-- Define and test the selected full-queue behavior.
+- Return and test `ERROR busy` when the waiting-task capacity is reached.
 - Coordinate response delivery safely with persistent client connections.
+- Verify that `single-threaded` mode creates no query workers.
 
 Learning checkpoint: trace a query from socket parsing, into the bounded queue, through one worker, and back to the correct client.
 
@@ -510,6 +626,7 @@ Learning checkpoint: draw 10 writers and several readers contending for the same
 
 #### 3E — Striped reader/writer locks
 
+- Add the striped sort-on-read implementation as the second real concurrent engine and introduce the shared concurrent-engine interface at this point.
 - Divide instruments across a modest fixed number of reader/writer locks.
 - Select a stripe with:
 
@@ -537,7 +654,7 @@ Learning checkpoint: identify which path pays the sorting cost and why only 10 e
 
 #### 3G — Correctness, concurrency, and shutdown tests
 
-- All implementations produce the same logical results as the Phase 1 reference for controlled finite streams.
+- The preserved Phase 2 mode and all three Phase 3 configurations produce the same logical results as the Phase 1 reference for controlled finite streams.
 - Duplicate, stale, out-of-order, invalid, and gapped sequence behavior remains correct.
 - Queries never expose partially written price entries.
 - Feed threads preserve ordering within their assigned exchanges.
@@ -550,6 +667,7 @@ Learning checkpoint: identify which path pays the sorting cost and why only 10 e
 
 ### Phase 3 exit condition
 
+- The completed Phase 2 single-threaded architecture remains runnable in the same server binary and creates no feed or query-worker threads.
 - The server uses 10 dedicated long-running feed threads and never creates a thread per update.
 - Persistent query clients use a bounded, configurable worker pool without monopolizing workers while idle.
 - Global and striped reader/writer locking produce the same logical results as the reference engine.
@@ -557,6 +675,7 @@ Learning checkpoint: identify which path pays the sorting cost and why only 10 e
 - Sort-on-read and sort-on-write both work using dense state.
 - Focused ThreadSanitizer tests report no project data races on their documented platform.
 - Shutdown succeeds while feed and query work is active.
+- The runtime modes and engine operations are stable enough for Phase 4 to compare identical workloads without redesigning the server.
 - The project owner can identify every thread, queue, lock, protected resource, and lock boundary.
 
 ## 9. Phase 4 — Benchmarks, testing, documentation, and résumé polish
@@ -580,32 +699,34 @@ Measure the project’s primary engineering tradeoffs with a small benchmark mat
 #### Direct engine benchmarks
 
 - Call update and query operations without TCP.
-- Use the real architecture's 10 feed-writer roles.
+- Use the original `MarketState` serially for the Phase 2 logical baseline and use the real architecture's 10 feed-writer roles for concurrent engines.
 - Use these benchmarks to compare locks and sorting without socket overhead obscuring the internal differences.
-- Use controlled seeds and workloads so configurations receive equivalent logical work.
+- Use controlled seeds, dimensions, update/query ratios, traffic distributions, and logical operations so configurations receive equivalent work.
 
 #### End-to-end TCP benchmark
 
-- Run one representative scenario through the real server, 10 exchange feeds, and query clients.
-- Demonstrate complete-system throughput and responsiveness.
+- Run representative scenarios through the real server, 10 exchange feeds, and a recorded number of concurrent query clients.
+- Select `single-threaded`, `global-read`, `striped-read`, or `striped-write` in the same server executable while keeping the protocol, publisher, client workload, dimensions, seeds, and measurement method identical.
+- Use this level for the first résumé bullet's overall system update rate, query rate, and p99 latency.
 - Do not use the TCP measurement alone to decide which internal sorting strategy is faster.
 
 ### Focused comparison matrix
 
-#### Global versus striped locking
+#### Single-threaded versus multithreaded locking
 
 Compare:
 
+- Phase 2 `single-threaded` with dense storage and sort-on-read.
 - Global locking with sort-on-read.
 - Striped locking with sort-on-read.
 
 Run:
 
 - Update-heavy uniform traffic.
-- Mixed uniform traffic.
-- Mixed hot-instrument traffic.
+- Balanced uniform traffic.
+- Balanced hot-instrument traffic.
 
-The purpose is to measure when striped locking reduces contention and how hot instruments limit that benefit.
+Use identical logical work for all three modes so execution model and lock granularity are the important variables. The purpose is to measure how much feed parallelism changes update throughput, when striped locking improves over one global lock, and how a hot instrument set limits that benefit.
 
 #### Sort-on-read versus sort-on-write
 
@@ -616,11 +737,12 @@ Compare:
 
 Run:
 
-- Update-heavy workloads.
-- Balanced update/query workloads.
-- Query-heavy workloads.
+- 90% updates / 10% queries.
+- 50% updates / 50% queries.
+- 10% updates / 90% queries.
+- Include both uniform and a focused hot-instrument case where it adds useful contention evidence.
 
-The purpose is to identify when paying the sorting cost during updates is worthwhile for only 10 exchange prices per instrument.
+Use striped locking for both modes so sorting placement is the important variable. The purpose is to identify when paying the sorting cost during updates is worthwhile for only 10 exchange prices per instrument. A 99% updates / 1% queries case may be added if it is inexpensive and clarifies the update-heavy result, but do not create a large matrix.
 
 #### Thread counts
 
@@ -632,6 +754,28 @@ Use 10 feed writers and a small set of query-worker counts, initially:
 
 Adjust the exact worker counts to the development machine's available CPU cores. Do not create a huge benchmark matrix.
 
+### Required metrics and interpretation
+
+Collect enough information to report:
+
+1. Maximum price updates per second.
+2. Simultaneous price updates per second and sorted queries per second.
+3. Query p50, p95, and p99 latency.
+4. Single-threaded versus multithreaded throughput.
+5. The number of concurrent clients tested.
+6. Global-lock versus striped-lock update throughput, query throughput, and p99 latency.
+7. Sort-on-read versus sort-on-write update throughput and query throughput.
+8. The exact update/query ratio and uniform or hot distribution for every result.
+
+Prefer separate rates because an update and query perform different work:
+
+- `[X updates/sec] while serving [Y queries/sec]`
+- `[Z microseconds p99 query latency]`
+- `increased update throughput from [A] to [B]`
+- `increased query capacity from [A] to [B] under a 90%-query workload`
+
+Combined operations per second may appear in detailed output but must not be the primary résumé metric. Throughput and latency must both be reported; high throughput does not justify hiding queueing delay or poor p99 latency. Avoid conclusions such as "increased mixed-workload throughput" without stating whether updates, queries, or both were counted.
+
 ### Implementation checkpoints
 
 #### 4A — Small benchmark harness
@@ -640,7 +784,9 @@ Adjust the exact worker counts to the development machine's available CPU cores.
 - Collect latency samples in thread-local storage and merge them after the measured interval.
 - Keep result calculation and logging outside the measured hot path where practical.
 - Emit simple CSV output.
-- Support the focused workloads and configurations listed above without building a general benchmark framework.
+- Run direct engine comparisons and end-to-end TCP comparisons as two distinct measurement levels.
+- Drive the same logical workload, seed, dimensions, ratio, and distribution through every configuration in a comparison.
+- Support the focused workloads and runtime modes listed above without building a general benchmark framework.
 - Run five repetitions for each final published scenario.
 - Use a release build for performance measurements.
 
@@ -655,9 +801,11 @@ Report:
 - Update throughput.
 - Query throughput.
 - Query p50, p95, and p99 latency.
+- Concurrent client count for TCP results.
 - Update latency where it is measured meaningfully.
 - Workload type and update/query ratio.
 - Uniform or hot-instrument distribution.
+- Runtime mode and direct-versus-TCP measurement level.
 - Writer and query-worker counts.
 - Stripe count.
 - Hardware and operating system.
@@ -694,20 +842,22 @@ Learning checkpoint: form a hypothesis before each comparison, then compare it w
 
 #### 4E — Résumé evidence and interview walkthrough
 
-- Write two or three résumé bullets using only measurements produced by the final controlled benchmarks.
+- Write up to three résumé bullets using only measurements produced by the final controlled benchmarks.
 - Replace bracketed examples only after the relevant numbers exist.
+- If a measured comparison does not support the intended wording, revise it to state the actual result rather than searching for a favorable but unrepresentative workload.
 - Conduct a final interview-style walkthrough of the architecture, one correctness decision, the locking comparison, the sorting comparison, and one benchmark conclusion.
 
 Candidate bullets should resemble:
 
-- Built a continuously running C++20 market-data server ingesting binary TCP feeds from 10 simulated exchanges across 50,000 instruments while serving real-time sorted-price queries to concurrent interactive clients.
-- Designed cache-conscious dense state, per-exchange sequence validation, dedicated feed threads, and a bounded client worker pool; maintained coherent reads using global and striped reader/writer locks.
-- Benchmarked global versus striped locking and sort-on-read versus sort-on-write across uniform and hot-instrument workloads, reaching `[X updates/sec]`, `[Y queries/sec]`, and `[Z microseconds p99 query latency]`.
+- Built a continuously running C++20 market-data server processing `[X price updates/sec]` across 10 TCP exchange feeds and 50,000 instruments, while serving `[Y sorted queries/sec]` at `[Z microseconds p99 latency]`.
+- Scaled the server from `[A]` to `[B] updates/sec` while supporting `[N concurrent clients]` by parallelizing feed processing and partitioning shared market state across striped locks.
+- Increased sorted-query capacity from `[A]` to `[B] queries/sec` under a 90%-query workload by maintaining ordered price views during updates, while sort-on-read performed best for update-heavy traffic.
 
-The bracketed values are structural examples only. They must not appear as claims in the final README and must be replaced only with actual measurements.
+The bracketed values and comparative wording are structural targets only. They must not appear as claims in the final README and must be replaced or revised only from actual measurements.
 
 ### Phase 4 exit condition
 
+- The preserved Phase 2 runtime and all Phase 3 modes are measured with identical methods and logically equivalent workloads.
 - Direct benchmarks isolate the required locking and sorting comparisons.
 - One end-to-end TCP benchmark demonstrates complete-system behavior.
 - Final published scenarios have five repetitions and complete environment context.
@@ -725,7 +875,8 @@ Do not plan or implement the following unless the four-phase project is complete
 - Fault-injection infrastructure.
 - Recording and replay.
 - UDP.
-- Optimistic, atomic-snapshot, or lock-free engines.
+- Per-instrument locks.
+- Optimistic, atomics-based snapshot, or lock-free engines.
 - Formal memory-ordering proofs.
 - Real market-data integrations.
 - CRC, TLS, protocol extensibility frameworks, or other production protocol features.
@@ -737,6 +888,7 @@ Do not plan or implement the following unless the four-phase project is complete
 - Databases, Kafka, or Kubernetes.
 - User accounts or trading integrations.
 - Factories, plugin systems, placeholder engines, or directories created for hypothetical future work.
+- Advanced benchmark frameworks or broad measurement infrastructure beyond the focused Phase 4 harness.
 
 These ideas are excluded because finishing, measuring, understanding, and presenting the selected system provides more résumé and learning value than expanding its feature count.
 
@@ -751,14 +903,20 @@ These ideas are excluded because finishing, measuring, understanding, and presen
 - `ctest --test-dir build --output-on-failure`: 29 of 29 tests passed, including ten-feed TCP integration, fragmentation and combination, invalid and truncated inputs, multiple clients, reconnects, direct-versus-TCP equivalence, and active-socket shutdown.
 - The documented Phase 1 demo processed 1,000,000 updates and produced checksum `0xc5b853573d929037` for seed 42. Two runs produced byte-identical output.
 - The verified three-process demonstration maintained 10 continuous feed connections while one persistent client returned sorted results for all exchanges; repeated queries showed changing live prices, and both server and simulator stopped cleanly with Ctrl+C.
-- Phase 3 multithreading has not started. No feed threads, worker pool, mutexes, shared mutexes, striped locks, sorting alternatives, or benchmark scaffolding exist.
-- Next session: explain the selected Phase 3 thread architecture, bounded query-worker queue, engine boundary, reader/writer locks, and sorting strategies before editing code.
+- The Phase 3/4 plan was refined on 2026-09-14 around three evidence-driven résumé outcomes. It now requires a selectable Phase 2 single-threaded baseline, separate update/query rates and tail latency, fair baseline/global/striped comparisons, and exact 90/10, 50/50, and 10/90 sorting comparisons. The target résumé wording remains provisional until controlled measurements support it.
+- Phase 3 implementation completed on 2026-09-14 without reopening the Phase 2 design or adding Phase 4 benchmark machinery. The same server binary now selects `single-threaded`, `global-read`, `striped-read`, or `striped-write`; the default remains the original single-threaded behavior.
+- The threaded runtime owns one permanent feed worker for every configured exchange and a bounded query-worker pool with configurable worker count and waiting capacity. Idle clients remain asynchronous socket reads on the main I/O thread, full queues return `ERROR busy`, and only the main I/O thread writes query-session sockets.
+- Added the minimal real concurrent-engine boundary plus global sort-on-read, striped sort-on-read, and striped sort-on-write dense engines. Stripes use `instrument_id % stripe_count`; per-exchange mutexes protect sequence state, stripe shared mutexes protect canonical entries and ordered views, and atomic counters support non-transactional snapshots.
+- Added concurrent oracle-equivalence, sequence, coherent-read, hot-contention, bounded-queue, idle-client, response-ordering, feed-framing, reconnect, and active-shutdown coverage. A clean Debug build passes all 41 discovered tests, and the focused concurrent/TCP subset passed 20 repeated runs.
+- Added the opt-in `EXCHANGELAB_ENABLE_THREAD_SANITIZER` CMake configuration. It compiles with Apple Clang on the current host, but the available ThreadSanitizer runtime crashes before GoogleTest startup; a focused runtime pass on supported Linux Clang or GCC remains required before claiming sanitizer validation or complete race-freedom evidence.
+- Phase 4 has not started. No benchmark harness, latency instrumentation, measured throughput numbers, or résumé claims were added; the selectable modes and concrete engine operations are now ready for fair direct and TCP comparisons.
 
 ## 12. Core definition of done
 
 ExchangeLab is complete when:
 
 - The server runs continuously until interrupted.
+- The Phase 2 single-threaded event-loop architecture remains selectable and benchmarkable beside the Phase 3 modes.
 - Ten exchange connections continuously publish updates.
 - The market state supports 50,000 instruments using the existing dense representation.
 - Fixed-point prices and per-exchange sequence validation remain correct.
@@ -774,6 +932,7 @@ ExchangeLab is complete when:
 - Direct benchmarks report the internal concurrency and sorting tradeoffs.
 - One end-to-end TCP benchmark demonstrates complete-system throughput and responsiveness.
 - Benchmarks report throughput and p50, p95, and p99 latency with complete workload and environment context.
+- Benchmark reports state update and query rates separately, the concurrent-client count, the exact update/query ratio, and the traffic distribution.
 - Unit, integration, sanitizer, and concurrency tests pass on their documented platforms.
 - All documented commands work from a clean build.
 - The README explains the architecture, measurements, tradeoffs, and limitations.

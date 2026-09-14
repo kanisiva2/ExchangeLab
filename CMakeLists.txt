@@ -7,6 +7,17 @@ project(
     LANGUAGES CXX
 )
 
+option(EXCHANGELAB_ENABLE_THREAD_SANITIZER
+       "Build with ThreadSanitizer instrumentation" OFF)
+
+if(EXCHANGELAB_ENABLE_THREAD_SANITIZER)
+    if(MSVC)
+        message(FATAL_ERROR "ThreadSanitizer is not supported by this CMake option on MSVC")
+    endif()
+    add_compile_options(-fsanitize=thread -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=thread)
+endif()
+
 function(exchangelab_enable_warnings target_name)
     if(MSVC)
         target_compile_options(${target_name} PRIVATE /W4)
@@ -16,7 +27,9 @@ function(exchangelab_enable_warnings target_name)
 endfunction()
 
 add_library(exchangelab_core
+    src/concurrent_market_state.cpp
     src/market_state.cpp
+    src/query_worker_pool.cpp
     src/simulator.cpp
 )
 
@@ -91,8 +104,10 @@ if(BUILD_TESTING)
     endif()
 
     add_executable(exchangelab_tests
+        tests/concurrent_market_state_test.cpp
         tests/market_state_test.cpp
         tests/query_protocol_test.cpp
+        tests/query_worker_pool_test.cpp
         tests/simulator_test.cpp
         tests/tcp_system_test.cpp
         tests/update_codec_test.cpp
@@ -106,5 +121,7 @@ if(BUILD_TESTING)
     exchangelab_enable_warnings(exchangelab_tests)
 
     include(GoogleTest)
-    gtest_discover_tests(exchangelab_tests)
+    # PRE_TEST avoids executing a sanitizer-instrumented binary while CMake is
+    # still building it. Discovery instead happens immediately before ctest.
+    gtest_discover_tests(exchangelab_tests DISCOVERY_MODE PRE_TEST)
 endif()

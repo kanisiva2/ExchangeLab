@@ -13,7 +13,6 @@
 #include <memory>
 #include <optional>
 #include <set>
-#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
@@ -885,14 +884,6 @@ MarketStats MarketServer::market_stats() const {
 std::uint64_t MarketServer::logical_checksum() const {
   return impl_->threaded() ? impl_->concurrent_state->logical_checksum()
                            : impl_->single_threaded_state->logical_checksum();
-}
-
-const MarketState &MarketServer::market_state() const {
-  if (!impl_->single_threaded_state) {
-    throw std::logic_error(
-        "market_state() is available only in single-threaded mode");
-  }
-  return *impl_->single_threaded_state;
 }
 
 } // namespace exchangelab

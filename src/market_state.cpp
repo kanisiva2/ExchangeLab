@@ -150,14 +150,6 @@ std::uint64_t MarketState::logical_checksum() const {
   return hash;
 }
 
-std::uint16_t MarketState::exchange_count() const noexcept {
-  return exchange_count_;
-}
-
-std::uint32_t MarketState::instrument_count() const noexcept {
-  return instrument_count_;
-}
-
 const MarketStats &MarketState::stats() const noexcept { return stats_; }
 
 std::size_t

@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <optional>
 #include <span>
-#include <string_view>
 
 namespace exchangelab {
 
@@ -46,7 +45,4 @@ struct UpdateDecodeResult {
 [[nodiscard]] UpdateFrame encode_update(const MarketUpdate &update);
 [[nodiscard]] UpdateDecodeResult
 decode_update(std::span<const std::uint8_t> frame, UpdateLimits limits);
-[[nodiscard]] std::string_view
-update_decode_error_name(UpdateDecodeError error) noexcept;
-
 } // namespace exchangelab

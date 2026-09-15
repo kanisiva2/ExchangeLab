@@ -65,11 +65,6 @@ public:
   [[nodiscard]] MarketStats market_stats() const;
   [[nodiscard]] std::uint64_t logical_checksum() const;
 
-  // Retained for Phase 2 callers. This reference is available only in
-  // single-threaded mode and must be observed on the event-loop thread or
-  // after the server has stopped.
-  [[nodiscard]] const MarketState &market_state() const;
-
 private:
   struct Impl;
   std::shared_ptr<Impl> impl_;

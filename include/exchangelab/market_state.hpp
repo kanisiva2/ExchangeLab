@@ -18,8 +18,6 @@ public:
   query(InstrumentId instrument_id) const;
   [[nodiscard]] std::uint64_t logical_checksum() const;
 
-  [[nodiscard]] std::uint16_t exchange_count() const noexcept;
-  [[nodiscard]] std::uint32_t instrument_count() const noexcept;
   [[nodiscard]] const MarketStats &stats() const noexcept;
 
 private:

@@ -9,6 +9,16 @@ project(
 
 option(EXCHANGELAB_ENABLE_THREAD_SANITIZER
        "Build with ThreadSanitizer instrumentation" OFF)
+option(EXCHANGELAB_ENABLE_ADDRESS_SANITIZER
+       "Build with AddressSanitizer instrumentation" OFF)
+option(EXCHANGELAB_ENABLE_UNDEFINED_SANITIZER
+       "Build with UndefinedBehaviorSanitizer instrumentation" OFF)
+
+if(EXCHANGELAB_ENABLE_THREAD_SANITIZER AND
+   (EXCHANGELAB_ENABLE_ADDRESS_SANITIZER OR
+    EXCHANGELAB_ENABLE_UNDEFINED_SANITIZER))
+    message(FATAL_ERROR "ThreadSanitizer cannot be combined with ASan or UBSan")
+endif()
 
 if(EXCHANGELAB_ENABLE_THREAD_SANITIZER)
     if(MSVC)
@@ -16,6 +26,24 @@ if(EXCHANGELAB_ENABLE_THREAD_SANITIZER)
     endif()
     add_compile_options(-fsanitize=thread -fno-omit-frame-pointer)
     add_link_options(-fsanitize=thread)
+endif()
+
+if(EXCHANGELAB_ENABLE_ADDRESS_SANITIZER OR
+   EXCHANGELAB_ENABLE_UNDEFINED_SANITIZER)
+    if(MSVC)
+        message(FATAL_ERROR "The sanitizer options are not supported on MSVC")
+    endif()
+    set(EXCHANGELAB_SANITIZERS "")
+    if(EXCHANGELAB_ENABLE_ADDRESS_SANITIZER)
+        list(APPEND EXCHANGELAB_SANITIZERS address)
+    endif()
+    if(EXCHANGELAB_ENABLE_UNDEFINED_SANITIZER)
+        list(APPEND EXCHANGELAB_SANITIZERS undefined)
+    endif()
+    list(JOIN EXCHANGELAB_SANITIZERS "," EXCHANGELAB_SANITIZER_FLAGS)
+    add_compile_options(-fsanitize=${EXCHANGELAB_SANITIZER_FLAGS}
+                        -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=${EXCHANGELAB_SANITIZER_FLAGS})
 endif()
 
 function(exchangelab_enable_warnings target_name)
@@ -87,6 +115,45 @@ add_executable(exchangelab-client src/client_main.cpp)
 target_link_libraries(exchangelab-client PRIVATE exchangelab_network)
 exchangelab_enable_warnings(exchangelab-client)
 
+execute_process(
+    COMMAND git rev-parse --short=12 HEAD
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE EXCHANGELAB_GIT_REVISION
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+execute_process(
+    COMMAND git status --porcelain
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE EXCHANGELAB_GIT_STATUS
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(NOT EXCHANGELAB_GIT_REVISION)
+    set(EXCHANGELAB_GIT_REVISION "unknown")
+endif()
+if(EXCHANGELAB_GIT_STATUS)
+    set(EXCHANGELAB_GIT_DIRTY 1)
+else()
+    set(EXCHANGELAB_GIT_DIRTY 0)
+endif()
+
+add_library(exchangelab_benchmark_support src/benchmark.cpp)
+target_link_libraries(exchangelab_benchmark_support PUBLIC exchangelab_network)
+target_compile_features(exchangelab_benchmark_support PUBLIC cxx_std_20)
+target_compile_definitions(exchangelab_benchmark_support PRIVATE
+    EXCHANGELAB_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
+    EXCHANGELAB_COMPILER_ID="${CMAKE_CXX_COMPILER_ID}"
+    EXCHANGELAB_COMPILER_VERSION="${CMAKE_CXX_COMPILER_VERSION}"
+    EXCHANGELAB_GIT_REVISION="${EXCHANGELAB_GIT_REVISION}"
+    EXCHANGELAB_GIT_DIRTY=${EXCHANGELAB_GIT_DIRTY}
+)
+exchangelab_enable_warnings(exchangelab_benchmark_support)
+
+add_executable(exchangelab-benchmark src/benchmark_main.cpp)
+target_link_libraries(exchangelab-benchmark PRIVATE exchangelab_benchmark_support)
+exchangelab_enable_warnings(exchangelab-benchmark)
+
 include(CTest)
 
 if(BUILD_TESTING)
@@ -105,6 +172,7 @@ if(BUILD_TESTING)
 
     add_executable(exchangelab_tests
         tests/concurrent_market_state_test.cpp
+        tests/benchmark_test.cpp
         tests/market_state_test.cpp
         tests/query_protocol_test.cpp
         tests/query_worker_pool_test.cpp
@@ -115,7 +183,7 @@ if(BUILD_TESTING)
     )
     target_link_libraries(exchangelab_tests
         PRIVATE
-            exchangelab_network
+            exchangelab_benchmark_support
             GTest::gtest_main
     )
     exchangelab_enable_warnings(exchangelab_tests)
@@ -123,5 +191,8 @@ if(BUILD_TESTING)
     include(GoogleTest)
     # PRE_TEST avoids executing a sanitizer-instrumented binary while CMake is
     # still building it. Discovery instead happens immediately before ctest.
-    gtest_discover_tests(exchangelab_tests DISCOVERY_MODE PRE_TEST)
+    gtest_discover_tests(exchangelab_tests
+        DISCOVERY_MODE PRE_TEST
+        DISCOVERY_TIMEOUT 30
+    )
 endif()

@@ -60,14 +60,6 @@ void QueryWorkerPool::stop() {
   workers_.clear();
 }
 
-std::size_t QueryWorkerPool::worker_count() const noexcept {
-  return worker_count_;
-}
-
-std::size_t QueryWorkerPool::queue_capacity() const noexcept {
-  return queue_capacity_;
-}
-
 void QueryWorkerPool::run_worker() {
   for (;;) {
     Task task;

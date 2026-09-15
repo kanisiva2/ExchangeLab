@@ -72,109 +72,27 @@ std::uint64_t calculate_checksum(
 
 GlobalMarketState::GlobalMarketState(const std::uint16_t exchange_count,
                                      const std::uint32_t instrument_count)
-    : exchange_count_(exchange_count), instrument_count_(instrument_count),
-      entries_(checked_entry_count(exchange_count, instrument_count)),
-      last_sequences_(exchange_count) {}
+    : state_(exchange_count, instrument_count) {}
 
 ApplyResult GlobalMarketState::apply(const MarketUpdate &update) {
   const std::unique_lock lock(state_mutex_);
-  ++stats_.received;
-
-  if (update.exchange_id >= exchange_count_) {
-    ++stats_.invalid;
-    return {ApplyStatus::invalid_exchange, 0};
-  }
-  if (update.instrument_id >= instrument_count_) {
-    ++stats_.invalid;
-    return {ApplyStatus::invalid_instrument, 0};
-  }
-  if (update.price <= 0) {
-    ++stats_.invalid;
-    return {ApplyStatus::invalid_price, 0};
-  }
-  if (update.sequence == 0) {
-    ++stats_.invalid;
-    return {ApplyStatus::invalid_sequence, 0};
-  }
-
-  auto &last_sequence = last_sequences_[update.exchange_id];
-  if (update.sequence == last_sequence) {
-    ++stats_.duplicates;
-    return {ApplyStatus::duplicate, 0};
-  }
-  if (update.sequence < last_sequence) {
-    ++stats_.stale;
-    return {ApplyStatus::stale, 0};
-  }
-
-  const auto difference = update.sequence - last_sequence;
-  const auto missing = difference > 1 ? difference - 1 : 0;
-  last_sequence = update.sequence;
-  entries_[entry_index(update.instrument_id, update.exchange_id)] = PriceEntry{
-      .price = update.price,
-      .last_sequence = update.sequence,
-      .source_timestamp_ns = update.source_timestamp_ns,
-      .valid = true,
-  };
-
-  ++stats_.accepted;
-  if (missing > 0) {
-    ++stats_.gap_events;
-    stats_.missing_sequences += missing;
-    return {ApplyStatus::accepted_with_gap, missing};
-  }
-  return {ApplyStatus::accepted, 0};
+  return state_.apply(update);
 }
 
 std::optional<QueryResult>
 GlobalMarketState::query(const InstrumentId instrument_id) const {
-  if (instrument_id >= instrument_count_) {
-    return std::nullopt;
-  }
-
-  QueryResult result;
-  result.instrument_id = instrument_id;
-  result.prices.reserve(exchange_count_);
-  result.missing_exchanges.reserve(exchange_count_);
-
-  {
-    const std::shared_lock lock(state_mutex_);
-    for (ExchangeId exchange_id = 0; exchange_id < exchange_count_;
-         ++exchange_id) {
-      const auto &entry = entries_[entry_index(instrument_id, exchange_id)];
-      if (entry.valid) {
-        result.prices.push_back(PriceView{
-            .exchange_id = exchange_id,
-            .price = entry.price,
-            .last_sequence = entry.last_sequence,
-            .source_timestamp_ns = entry.source_timestamp_ns,
-        });
-      } else {
-        result.missing_exchanges.push_back(exchange_id);
-      }
-    }
-  }
-
-  sort_prices(result.prices);
-  return result;
+  const std::shared_lock lock(state_mutex_);
+  return state_.query(instrument_id);
 }
 
 MarketStats GlobalMarketState::stats() const {
   const std::shared_lock lock(state_mutex_);
-  return stats_;
+  return state_.stats();
 }
 
 std::uint64_t GlobalMarketState::logical_checksum() const {
   const std::shared_lock lock(state_mutex_);
-  return calculate_checksum(exchange_count_, instrument_count_,
-                            last_sequences_, entries_);
-}
-
-std::size_t
-GlobalMarketState::entry_index(const InstrumentId instrument_id,
-                               const ExchangeId exchange_id) const noexcept {
-  return static_cast<std::size_t>(instrument_id) * exchange_count_ +
-         exchange_id;
+  return state_.logical_checksum();
 }
 
 StripedMarketState::StripedMarketState(const std::uint16_t exchange_count,
@@ -329,14 +247,6 @@ std::uint64_t StripedMarketState::logical_checksum() const {
 
   return calculate_checksum(exchange_count_, instrument_count_,
                             last_sequences_, entries_);
-}
-
-std::size_t StripedMarketState::stripe_count() const noexcept {
-  return stripe_count_;
-}
-
-SortingMode StripedMarketState::sorting_mode() const noexcept {
-  return sorting_mode_;
 }
 
 std::size_t

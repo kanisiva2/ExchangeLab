@@ -79,25 +79,4 @@ UpdateDecodeResult decode_update(const std::span<const std::uint8_t> frame,
   };
 }
 
-std::string_view
-update_decode_error_name(const UpdateDecodeError error) noexcept {
-  switch (error) {
-  case UpdateDecodeError::none:
-    return "none";
-  case UpdateDecodeError::wrong_size:
-    return "wrong size";
-  case UpdateDecodeError::unsupported_version:
-    return "unsupported version";
-  case UpdateDecodeError::invalid_exchange:
-    return "invalid exchange";
-  case UpdateDecodeError::invalid_instrument:
-    return "invalid instrument";
-  case UpdateDecodeError::invalid_price:
-    return "invalid price";
-  case UpdateDecodeError::invalid_sequence:
-    return "invalid sequence";
-  }
-  return "unknown";
-}
-
 } // namespace exchangelab

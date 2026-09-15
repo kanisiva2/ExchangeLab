@@ -24,9 +24,6 @@ public:
   [[nodiscard]] bool try_submit(Task task);
   void stop();
 
-  [[nodiscard]] std::size_t worker_count() const noexcept;
-  [[nodiscard]] std::size_t queue_capacity() const noexcept;
-
 private:
   void run_worker();
 

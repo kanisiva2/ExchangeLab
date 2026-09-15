@@ -1,6 +1,6 @@
 #pragma once
 
-#include "exchangelab/types.hpp"
+#include "exchangelab/market_state.hpp"
 
 #include <atomic>
 #include <cstddef>
@@ -41,21 +41,7 @@ public:
   [[nodiscard]] std::uint64_t logical_checksum() const override;
 
 private:
-  struct PriceEntry {
-    Price price{};
-    SequenceNumber last_sequence{};
-    TimestampNs source_timestamp_ns{};
-    bool valid{};
-  };
-
-  [[nodiscard]] std::size_t entry_index(InstrumentId instrument_id,
-                                        ExchangeId exchange_id) const noexcept;
-
-  std::uint16_t exchange_count_;
-  std::uint32_t instrument_count_;
-  std::vector<PriceEntry> entries_;
-  std::vector<SequenceNumber> last_sequences_;
-  MarketStats stats_;
+  MarketState state_;
   mutable std::shared_mutex state_mutex_;
 };
 
@@ -70,9 +56,6 @@ public:
   query(InstrumentId instrument_id) const override;
   [[nodiscard]] MarketStats stats() const override;
   [[nodiscard]] std::uint64_t logical_checksum() const override;
-
-  [[nodiscard]] std::size_t stripe_count() const noexcept;
-  [[nodiscard]] SortingMode sorting_mode() const noexcept;
 
 private:
   struct PriceEntry {

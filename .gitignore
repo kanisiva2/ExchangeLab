@@ -1,5 +1,6 @@
 # CMake build output
 /build/
+/build-*/
 /cmake-build-*/
 /out/
 
@@ -28,3 +29,6 @@ Testing/
 # Local learning walkthroughs
 /docs/phase-1-explanation.md
 /docs/phase-2-explanation.md
+/docs/phase-3-explanation.md
+/docs/phase-4-explanation.md
+/docs/implementation-plan.md

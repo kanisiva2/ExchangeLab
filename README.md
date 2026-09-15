@@ -206,14 +206,14 @@ Clang 17.0.0, seed 42, 10 exchanges, and 50,000 instruments:
 
 | Level and workload | Mode | Updates/sec | Queries/sec | Query p50/p95/p99 |
 |---|---|---:|---:|---:|
-| TCP, 90/10 uniform, 16 clients | single-threaded | 501,676 | 55,742 | 191 / 824 / 2,269 us |
-| Direct, 50/50 uniform | global-read | 867,842 | 867,842 | 0.209 / 12.417 / 52.541 us |
-| Direct, 50/50 uniform | striped-read | 3,125,843 | 3,125,843 | 0.250 / 0.709 / 24.000 us |
+| TCP, 90/10 uniform, 16 clients | single-threaded | 485,875 | 53,986 | 194 / 1,007 / 1,889 us |
+| Direct, 50/50 uniform | global-read | 851,604 | 851,604 | 0.250 / 12.250 / 57.750 us |
+| Direct, 50/50 uniform | striped-read | 3,328,332 | 3,328,332 | 0.209 / 0.750 / 25.916 us |
 
 The controlled measurements showed:
 
-- Striped locking raised each separate direct-engine rate approximately 3.6×
-  and reduced p99 about 54% relative to the global lock.
+- Striped locking raised each separate direct-engine rate approximately 3.9×
+  and reduced p99 about 55% relative to the global lock.
 - The single-threaded engine remained faster overall for this small amount of
   work per operation; concurrency overhead is not free.
 - Sort-on-read beat sort-on-write at every tested update/query ratio because a
